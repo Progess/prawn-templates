@@ -27,6 +27,7 @@ module Prawn
       return super unless options[:template]
 
       last_page = state.page
+
       if last_page
         last_page_size = last_page.size
         last_page_layout = last_page.layout
@@ -50,7 +51,7 @@ module Prawn
         page_options[:graphic_state] = new_graphic_state
       end
 
-      merge_template_options(page_options, options)
+      merge_template_options(page_options, options, @page_number)
 
       state.page = PDF::Core::Page.new(self, page_options)
 
@@ -84,11 +85,13 @@ module Prawn
       end
     end
 
-    def merge_template_options(page_options, options)
+    def merge_template_options(page_options, options, current_page_number)
       object_id = state.store.import_page(
         options[:template],
-        options[:template_page] || 1
+        options[:template_page] || 1,
+        current_page_number
       )
+
       page_options.merge!(object_id: object_id, page_template: true)
     end
 
@@ -105,9 +108,9 @@ module Prawn
       # Imports nothing and returns nil if the requested page number doesn't
       # exist. page_num is 1 indexed, so 1 indicates the first page.
       #
-      def import_page(input, page_num)
+      def import_page(input, page_num, current_page_number)
         @loaded_objects = {}
-        template_id = indexed_template(input, page_num)
+        template_id = indexed_template(input, page_num, current_page_number)
         return template_id if template_id
 
         io = if input.respond_to?(:seek) && input.respond_to?(:read)
@@ -119,7 +122,7 @@ module Prawn
                'filename'
              end
 
-        hash = indexed_hash(input, io)
+        hash = indexed_hash(input, io, current_page_number)
         ref = hash.page_references[page_num - 1]
 
         if ref.nil?
@@ -127,9 +130,11 @@ module Prawn
         else
           index_template(
             input, page_num,
-            load_object_graph(hash, ref).identifier
+            load_object_graph(hash, ref).identifier,
+            current_page_number
           )
         end
+
       rescue PDF::Reader::MalformedPDFError,
              PDF::Reader::InvalidObjectError => e
         msg = 'Error reading template file. If you are sure it\'s a valid PDF,'\
@@ -150,14 +155,14 @@ module Prawn
 
       # returns the indexed object graph identifier for a template page if
       # it exists
-      def indexed_template(input, page_number)
-        key = indexing_key(input)
+      def indexed_template(input, page_number, current_page_number)
+        key = indexing_key(input, current_page_number)
         template_index[key] && template_index[key][page_number]
       end
 
       # indexes the identifier for a page from a template
-      def index_template(input, page_number, id)
-        (template_index[indexing_key(input)] ||= {})[page_number] ||= id
+      def index_template(input, page_number, id, current_page_number)
+        (template_index[indexing_key(input, current_page_number)] ||= {})[page_number] ||= id
       end
 
       # An index for the read object hash of a pdf template so that the
@@ -170,16 +175,16 @@ module Prawn
       # reads and indexes a new IO for a template
       # if the IO has been indexed already then the parsed object hash
       # is returned directly
-      def indexed_hash(input, io)
-        hash_index[indexing_key(input)] ||= PDF::Reader::ObjectHash.new(io)
+      def indexed_hash(input, io, current_page_number)
+        hash_index[indexing_key(input, current_page_number)] ||= PDF::Reader::ObjectHash.new(io)
       end
 
       # the index key for the input.
       # uses object_id so that both a string filename or an IO stream can be
       # indexed and reused provided the same object gets used in multiple page
       # template calls.
-      def indexing_key(input)
-        input.object_id
+      def indexing_key(input, current_page_number)
+        input.object_id + current_page_number
       end
 
       # returns a nested array of object IDs for all pages in this object store.
